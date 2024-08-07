@@ -1,5 +1,5 @@
 /*
- * Copyright 2020-2021 K. Takeo. All rights reserved.
+ * Copyright 2020-2022 K. Takeo. All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -34,35 +34,28 @@
 #include <string.h>
 #include <unistd.h>
 
+#include <libusb.h>
 #include "libuvc/libuvc.h"
 #include "thetauvc.h"
 
-#define USBVID_RICOH 0x05ca
-#define USBPID_THETAV_UVC 0x2712
-#define USBPID_THETAZ1_UVC 0x2715
-
-struct thetauvc_mode
-{
-    unsigned int mode;
-    unsigned int width;
-    unsigned int height;
-    unsigned int fps;
-};
-
-typedef struct thetauvc_mode thetauvc_mode_t;
-
 static thetauvc_mode_t stream_mode[] = {
     {
-     .mode = THETAUVC_MODE_UHD_2997,
+     .mode = THETAUVC_MODE_UHD,
      .width = 3840,
      .height = 1920,
-     .fps = 29,
+     .fps = 0,
      },
     {
-     .mode = THETAUVC_MODE_FHD_2997,
+     .mode = THETAUVC_MODE_FHD,
      .width = 1920,
      .height = 960,
-     .fps = 29,
+     .fps = 0,
+     },
+    {
+     .mode = THETAUVC_MODE_FHD_S,
+     .width = 1920,
+     .height = 1080,
+     .fps = 0,
      },
     {
      .mode = THETAUVC_MODE_NUM,
@@ -71,6 +64,8 @@ static thetauvc_mode_t stream_mode[] = {
      .fps = 0,
      }
 };
+
+static const char iProduct[] = "RICOH THETA";
 
 uvc_error_t
 thetauvc_find_devices(uvc_context_t * ctx, uvc_device_t *** devs)
@@ -99,8 +94,7 @@ thetauvc_find_devices(uvc_context_t * ctx, uvc_device_t *** devs)
 	if (uvc_get_device_descriptor(dev, &desc) != UVC_SUCCESS)
 	    continue;
 
-	if (desc->idProduct == USBPID_THETAV_UVC
-	    || desc->idProduct == USBPID_THETAZ1_UVC) {
+	if (desc->product && strncmp(desc->product, iProduct, strlen(iProduct)) == 0) {
 	    void   *tmp_ptr;
 
 	    devcnt++;
@@ -244,7 +238,8 @@ thetauvc_find_device_by_serial(uvc_context_t * ctx, uvc_device_t ** devh,
 uvc_error_t
 thetauvc_get_stream_ctrl_format_size(uvc_device_handle_t * devh,
 				     unsigned int mode,
-				     uvc_stream_ctrl_t * ctrl)
+				     uvc_stream_ctrl_t * ctrl,
+				     thetauvc_mode_t *mode_val)
 {
     uvc_error_t res;
     thetauvc_mode_t *m;
@@ -258,6 +253,7 @@ thetauvc_get_stream_ctrl_format_size(uvc_device_handle_t * devh,
 	    m = &stream_mode[i];
     }
 
+    memcpy(mode_val, m, sizeof(thetauvc_mode_t));
     res = uvc_get_stream_ctrl_format_size(devh, ctrl,
 					  UVC_FRAME_FORMAT_H264, m->width,
 					  m->height, m->fps);
@@ -266,23 +262,39 @@ thetauvc_get_stream_ctrl_format_size(uvc_device_handle_t * devh,
 }
 
 uvc_error_t
-thetauvc_run_streaming(uvc_device_t * dev, uvc_device_handle_t ** devh,
-		       unsigned int mode, uvc_frame_callback_t * cb,
-		       void *pdata)
+thetauvc_switch_configuration(uint8_t bus, uint8_t addr, uint8_t ncfg)
 {
-    uvc_error_t res;
-    uvc_stream_ctrl_t ctrl;
+    libusb_context *ctx;
+    libusb_device_handle *devh;
+    libusb_device **udev, *dev;
+    int cfg, sz, i;
 
-    res = uvc_open(dev, devh);
-    if (res != UVC_SUCCESS)
-	return res;
-    thetauvc_get_stream_ctrl_format_size(*devh, mode, &ctrl);
-    if (res != UVC_SUCCESS)
-	printf("error");
+    libusb_init(&ctx);
+    sz = libusb_get_device_list(ctx, &udev);
+    for (i = 0; i < sz; i++) {
+	dev = udev[i];
+	if (libusb_get_bus_number(dev) != bus)
+	    continue;
+	if (libusb_get_device_address(dev) == addr)
+	    break;
+    }
 
-    res = uvc_start_streaming(*devh, &ctrl, cb, pdata, 0);
+    if (i == sz)
+        return UVC_ERROR_INVALID_PARAM;
 
-    uvc_close(*devh);
+    libusb_open(dev, &devh);
+    libusb_get_configuration(devh, &cfg);
+
+    if (cfg != ncfg) {
+        libusb_detach_kernel_driver(devh, 0);
+	libusb_detach_kernel_driver(devh, 2);
+	libusb_detach_kernel_driver(devh, 3);
+	libusb_set_configuration(devh, ncfg);
+    }
+
+    libusb_close(devh);
+    libusb_free_device_list(udev, 1);
+    libusb_exit(ctx);
 
     return UVC_SUCCESS;
 }

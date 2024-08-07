@@ -24,6 +24,8 @@
 #include <gst/base/base.h>
 #include <gst/video/video.h>
 
+#include <libusb.h>
+
 #include "libuvc/libuvc.h"
 #include "thetauvc.h"
 
@@ -53,8 +55,11 @@ struct _GstThetauvcsrc
     GstQueueArray *queue;
 
     gint    device_number;
+    gint    device_index;
     gchar  *serial;
     GstThetauvcModeEnum mode;
+    GstCaps *current_caps;
+    thetauvc_mode_t mode_val;
 
     uvc_context_t *ctx;
     uvc_device_t *dev;
@@ -62,6 +67,7 @@ struct _GstThetauvcsrc
     uvc_stream_ctrl_t ctrl;
 
     guint64 framecount;
+    uint16_t dev_pid;
 };
 
 struct _GstThetauvcsrcClass
